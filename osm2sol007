@@ -1,0 +1,126 @@
+#!/usr/bin/python3
+
+import os
+import hashlib
+import shutil
+import sys
+import yaml
+import datetime
+
+LICENSE_PATH = 'LICENSE'
+
+def usage():
+    print('Usage: osm2sol007 <package_path> <dest_path>')
+    print('example: osm2sol007 rel9packages/native_charm_ns new_native_charm_ns')
+
+if len(sys.argv) != 3:
+    usage()
+    sys.exit(1)
+
+package_path = sys.argv[1]
+destination_path = sys.argv[2]
+
+def copy_file(src_path, dest_path):
+    shutil.copyfile(src_path, dest_path)
+
+def copy_recursively(src_path, dest_path):
+    if os.path.exists(dest_path):
+        shutil.rmtree(dest_path)
+    shutil.copytree(src_path, dest_path)
+
+def get_package_descriptor(package_elements):
+    package_yamls = [f for f in package_elements if f.endswith('.yml') or f.endswith('.yaml')]
+    if len(package_yamls) != 1:
+        print('ERROR: Valid package should contain exactly 1 YAML descriptor, found {}!'.format(len(package_yamls)))
+        sys.exit(1)
+    return package_yamls[0]
+
+def get_file_hash(file_path):
+    with open(file_path, "rb") as f:
+        return hashlib.sha512(f.read()).hexdigest()
+
+def write_changelog():
+    s = '\n1.0.0\n\n- Package converted with OSM package migration tool.\n\n'
+    with open(os.path.join(destination_path, 'ChangeLog.txt'), 'w+') as f:
+        f.write(s)
+
+def write_license():
+    if os.path.exists(os.path.join(destination_path, 'Licenses')):
+        shutil.rmtree(os.path.join(destination_path, 'Licenses'))
+    os.mkdir(os.path.join(destination_path, 'Licenses'))
+    copy_file(LICENSE_PATH, os.path.join(destination_path, 'Licenses/license.lic'))
+
+def write_manifest_file(descriptor_dest_fullpath, file_hashes):
+    manifest_path = descriptor_dest_fullpath.replace('.yml', '.mf').replace('.yaml', '.mf')
+    s = '\n'
+
+    with open(descriptor_dest_fullpath, 'r') as f:
+        try:
+            nsd_data = yaml.safe_load(f)['nsd']
+        except yaml.YAMLError as e:
+            print('Error reading descriptor {}: {}'.format(descriptor_dest_fullpath, e))
+            sys.exit(1)
+
+    s += 'nsd_invariant_id: {}\n'.format(nsd_data.get('id', 'default-id'))
+    s += 'nsd_name: {}\n'.format(nsd_data.get('name', 'default-name'))
+    s += 'nsd_designer: {}\n'.format(nsd_data.get('designer', 'OSM'))
+    s += 'nsd_file_structure_version: {}\n'.format(nsd_data.get('version', '1.0'))
+    s += 'nsd_release_date_time: {}\n'.format(datetime.datetime.now().astimezone().isoformat())
+    s += 'compatible_specification_versions: 3.3.1\n\n'
+
+    for file, hash in file_hashes.items():
+        file_block = 'Source: {}\nAlgorithm: SHA-512\nHash: {}\n\n'.format(file, hash)
+        s += file_block
+
+    with open(manifest_path, 'w+') as f:
+        f.write(s)
+
+
+def main():
+    file_hashes = {}
+
+    package_elements = os.listdir(package_path)
+
+    if 'icons' in package_elements:
+        src_path = os.path.join(package_path, 'icons')
+        dest_path = os.path.join(destination_path, 'Files/icons')
+        copy_recursively(src_path, dest_path)
+
+    if 'cloud_init' in package_elements:
+        src_path = os.path.join(package_path, 'cloud_init')
+        dest_path = os.path.join(destination_path, 'Scripts/cloud_init')
+        copy_recursively(src_path, dest_path)
+        for root, dirs, files in os.walk(dest_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                file_relative_path = file_path[len(destination_path):]
+                if file_relative_path.startswith('/'):
+                    file_relative_path = file_relative_path[1:]
+                file_hashes[file_relative_path] = get_file_hash(file_path)
+
+    if 'charms' in package_elements:
+        src_path = os.path.join(package_path, 'charms')
+        dest_path = os.path.join(destination_path, 'Scripts/charms')
+        copy_recursively(src_path, dest_path)
+        for root, dirs, files in os.walk(dest_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                file_relative_path = file_path[len(destination_path):]
+                if file_relative_path.startswith('/'):
+                    file_relative_path = file_relative_path[1:]
+                file_hashes[file_relative_path] = get_file_hash(file_path)
+
+    descriptor_name = get_package_descriptor(package_elements)
+    descriptor_fullpath = os.path.join(package_path, descriptor_name)
+    descriptor_dest_fullpath = os.path.join(destination_path, descriptor_name)
+    copy_file(descriptor_fullpath, descriptor_dest_fullpath)
+    file_hashes[descriptor_name] = get_file_hash(descriptor_dest_fullpath)
+
+    write_changelog()
+    write_license()
+    write_manifest_file(descriptor_dest_fullpath, file_hashes)
+    
+    print('Process completed! SOL007 package available at: {}'.format(destination_path))
+
+main()
+
